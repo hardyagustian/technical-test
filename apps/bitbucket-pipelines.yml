@@ -1,0 +1,53 @@
+mage: atlassian/default-image:4
+
+definitions:
+  services:
+    docker:
+      memory: 2048
+  steps:
+     - step: &BuildImage
+        name: Build and Push
+        image: repo/image_name:latest
+        size: 2x
+        script:
+          - eval $(aws ecr get-login --region ${AWS_DEFAULT_REGION} --no-include-email)
+          - export AWS_REGISTRY_URL="$AWS_ACCOUNT.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$BITBUCKET_REPO_SLUG"
+          - export BUILD_ID="$BITBUCKET_TAG-$BITBUCKET_COMMIT-$BITBUCKET_BUILD_NUMBER"
+          - docker build -t ${AWS_REGISTRY_URL}:$BUILD_ID .
+          - docker push ${AWS_REGISTRY_URL}:$BUILD_ID
+          - echo $BUILD_ID > buildid.txt
+        artifacts:
+          - buildid.txt
+        services:
+          - docker
+
+     - step: &Deployer
+        image: repo/image_name:latest
+        name: Deploy to Development
+        script:
+          - export BUILDID=$(cat buildid.txt)
+          - export IMAGE="$AWS_ACCOUNT.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$BITBUCKET_REPO_SLUG"
+          - pipe: atlassian/ssh-run:0.2.6
+            variables:
+              SSH_USER: $SSH_USER
+              SERVER: $SSH_SERVER_IP
+              COMMAND: |
+                sudo docker image prune -a -f || true
+                sudo docker pull $IMAGE:$$BUILD_ID
+                sudo docker service rm $BITBUCKET_REPO_SLUG || true
+                sudo docker service create --name $BITBUCKET_REPO_SLUG -p 3000:3000 --replicas 4 $IMAGE_ID:$BITBUCKET_COMMIT
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Build Image On branches main
+          <<: *BuildImage
+          runs-on:
+            - private.runner
+      - step:
+          name: Deploy to image
+          <<: *Deployer
+          runs-on:
+            - private.runner
+          trigger: manual
