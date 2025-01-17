@@ -1,4 +1,4 @@
-mage: atlassian/default-image:4
+image: atlassian/default-image:4
 
 definitions:
   services:
